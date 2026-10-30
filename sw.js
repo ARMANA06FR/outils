@@ -1,4 +1,4 @@
-const VERSION = 'outils-v5';
+const VERSION = 'outils-v6';
 const FILES = ['./', './index.html', './style.css', './app.js', './manifest.json', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

@@ -19,5 +19,6 @@ et liste de course des articles à acheter.
 - Réglages > « Remplissage automatique » : coller l'adresse du relais (`https://….workers.dev`), puis « Enregistrer et tester ».
 - Dans un formulaire : coller un lien dans « Lien vers l'article » remplit nom, prix, photo, descriptif, magasin et catégorie.
 - Android : une fois l'application installée, « Partager » depuis le navigateur ou l'application d'un magasin > « Mes outils ».
-- Après mise à jour du code, `VERSION` dans `sw.js` est passée à `outils-v5`.
+- Après mise à jour du code, `VERSION` dans `sw.js` est passée à `outils-v6`.
 - Liste de course : photo (appareil ou galerie) possible ; elle suit l'article quand il passe à l'inventaire. Une photo prise à la main a priorité sur celle du site.
+- Si un site refuse la lecture (Amazon…) ou si le relais est absent : l'appli remplit quand même le nom (titre reçu par « Partager » ou nom contenu dans l'adresse), le magasin et la catégorie. Prix et photo restent à compléter.
