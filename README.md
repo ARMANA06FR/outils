@@ -13,3 +13,10 @@ et liste de course des articles à acheter.
 - Les données restent dans le navigateur de l'appareil : Réglages > « Sauvegarder » pour exporter un fichier complet (photos incluses).
 - Les deux applications (logement et outils) ont chacune leur propre stockage et leur propre sauvegarde.
 - Pour publier une mise à jour du code, changez `VERSION` dans `sw.js`.
+
+## Remplissage automatique depuis un lien (nouveau)
+- Le fichier `worker.js` (fourni à part) se colle dans un Worker Cloudflare gratuit : c'est le « relais » qui lit les pages des magasins.
+- Réglages > « Remplissage automatique » : coller l'adresse du relais (`https://….workers.dev`), puis « Enregistrer et tester ».
+- Dans un formulaire : coller un lien dans « Lien vers l'article » remplit nom, prix, photo, descriptif, magasin et catégorie.
+- Android : une fois l'application installée, « Partager » depuis le navigateur ou l'application d'un magasin > « Mes outils ».
+- Après mise à jour du code, `VERSION` dans `sw.js` est passée à `outils-v3`.

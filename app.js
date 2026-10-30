@@ -12,6 +12,107 @@ const today = () => { const t = new Date(); return new Date(t.getTime() - t.getT
 const fmtDay = s => String(s).split('-').reverse().join('/');
 const fixUrl = u => { u = String(u || '').trim(); return u && !/^https?:\/\//i.test(u) ? 'https://' + u : u; };
 
+/* ---------- remplissage automatique depuis un lien ---------- */
+const relayUrl = () => (localStorage.getItem('relayOutils') || '').trim().replace(/\/+$/, '');
+const firstLink = (...parts) => { const m = parts.filter(Boolean).join(' ').match(/https?:\/\/[^\s<>"']+/i); return m ? m[0].replace(/[).,;]+$/, '') : ''; };
+
+// mots-clés (sans accents) -> nom de catégorie par défaut
+const CAT_RULES = [
+  ['Outillage électroportatif', ['perceuse', 'visseuse', 'meuleuse', 'ponceuse', 'scie sauteuse', 'scie circulaire', 'scie sabre', 'perforateur', 'defonceuse', 'rabot electrique', 'decapeur', 'pistolet a colle', 'sans fil', 'batterie', 'cloueur', 'agrafeuse electrique', 'aspirateur atelier']],
+  ['Outillage à main', ['marteau', 'tournevis', 'pince', 'cle', 'cles', 'scie', 'egoine', 'ciseau', 'burin', 'maillet', 'lime', 'cutter', 'serre-joint', 'etau', 'rabot', 'cliquet', 'douille', 'tenaille', 'masse', 'pied de biche']],
+  ['Jardin', ['tondeuse', 'taille-haie', 'secateur', 'souffleur', 'debroussailleuse', 'tronconneuse', 'arrosage', 'beche', 'rateau', 'pelle', 'brouette', 'jardin', 'cisaille', 'pulverisateur', 'serfouette']],
+  ['Maçonnerie', ['truelle', 'taloche', 'betonniere', 'auge', 'mortier', 'fer a beton', 'platoir', 'berthelet', 'echafaudage', 'massette']],
+  ['Plomberie', ['robinet', 'siphon', 'raccord', 'plomberie', 'debouche', 'ventouse', 'teflon', 'collier de serrage', 'multiprise', 'coupe-tube', 'tuyau', 'flexible']],
+  ['Électricité', ['ampoule', 'cable', 'prise', 'interrupteur', 'disjoncteur', 'multimetre', 'testeur', 'gaine', 'domino', 'denudeur', 'rallonge', 'electricien', 'torche', 'lampe']],
+  ['Peinture et droguerie', ['peinture', 'pinceau', 'rouleau', 'bache', 'enduit', 'couteau a enduire', 'ruban de masquage', 'lasure', 'vernis', 'colle', 'silicone', 'mastic', 'decapant', 'brosse a peinture']],
+  ['Menuiserie et bois', ['tasseau', 'menuiserie', 'charniere', 'gond', 'chevillette', 'bois', 'panneau', 'lambris', 'poignee', 'serrure']],
+  ['Carrelage et sol', ['carrelage', 'croisillon', 'coupe-carreau', 'parquet', 'plinthe', 'raclette', 'faience']],
+  ['Quincaillerie et fixation', ['vis', 'boulon', 'cheville', 'clou', 'ecrou', 'rondelle', 'rivet', 'fixation', 'crochet', 'attache', 'collier', 'equerre']],
+  ['Mesure et traçage', ['metre', 'laser', 'telemetre', 'niveau', 'regle', 'trusquin', 'cordeau', 'tracage', 'compas', 'fil a plomb', 'mesure']],
+  ['Sécurité et protection', ['gant', 'lunettes', 'casque', 'masque', 'protection', 'genouillere', 'chaussure de securite', 'bouchon', 'antibruit', 'combinaison']],
+  ['Rangement et atelier', ['etabli', 'servante', 'caisse a outils', 'coffret', 'rangement', 'etagere', 'mallette', 'organiseur', 'boite a outils', 'sacoche', 'trousse']],
+  ['Nettoyage et entretien', ['nettoyeur', 'karcher', 'eponge', 'balai', 'serpilliere', 'nettoyage', 'degraissant', 'aspirateur', 'chiffon']],
+];
+function guessCat(name) {
+  const n = ' ' + norm(name) + ' ';
+  let best = null, bestScore = 0;
+  for (const [label, words] of CAT_RULES) {
+    let sc = 0;
+    for (const w of words) if (new RegExp('[^a-z0-9]' + w.replace(/[-\s]/g, '[- ]') + 's?(?![a-z0-9])').test(n)) sc++;
+    if (sc > bestScore) { best = label; bestScore = sc; }
+  }
+  if (!best) return '';
+  const c = cats.find(x => norm(x.name) === norm(best));
+  return c ? c.id : '';
+}
+
+async function relayGet(path, asBlob) {
+  const base = relayUrl();
+  if (!base) throw new Error('no-relay');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 25000);
+  try {
+    const r = await fetch(base + '/' + path, { signal: ctrl.signal });
+    if (asBlob) { if (!r.ok) throw new Error('no-image'); return await r.blob(); }
+    return await r.json();
+  } finally { clearTimeout(timer); }
+}
+
+// Branche le bouton « Remplir automatiquement » d'un formulaire (pre = 'f' inventaire, 's' liste de course)
+function bindAutofill(pre, sel, photos) {
+  const g = id => $('#' + pre + '-' + id, sheet);
+  const urlEl = g('url'), btn = g('auto'), msg = g('automsg');
+  let busy = false;
+  const setIf = (id, v) => { const el = g(id); if (el && v && !el.value.trim()) { el.value = v; return true; } return false; };
+  const run = async () => {
+    if (busy) return;
+    const link = firstLink(urlEl.value);
+    if (!link) { toast('Collez d’abord le lien de l’article.'); urlEl.focus(); return; }
+    if (!relayUrl()) { msg.textContent = 'Le remplissage automatique n’est pas encore réglé : allez dans Réglages > Remplissage automatique.'; return; }
+    busy = true; btn.disabled = true;
+    msg.textContent = 'Lecture de la page en cours…';
+    try {
+      const p = await relayGet('?url=' + encodeURIComponent(link));
+      if (!p || !p.ok) {
+        msg.textContent = p && p.error === 'blocked' ? 'Ce site refuse la lecture automatique. Remplissez à la main : le lien est conservé.'
+          : p && p.error === 'empty' ? 'Aucune information trouvée sur cette page. Remplissez à la main.'
+          : 'La page n’a pas pu être lue. Remplissez à la main.';
+        return;
+      }
+      urlEl.value = p.finalUrl || link;
+      const got = [];
+      const nameWasEmpty = !g('name').value.trim();
+      if (setIf('name', p.name)) got.push('nom');
+      if (p.price != null && setIf('price', p.price.toFixed(2).replace('.', ','))) got.push('prix');
+      if (g('desc') && setIf('desc', p.description)) got.push('descriptif');
+      if (setIf('notes', [p.brand && 'Marque : ' + p.brand, p.sku && 'Réf. : ' + p.sku].filter(Boolean).join(' – '))) got.push('référence');
+      const st = g('store');
+      if (p.store && st) {
+        const cur = st.value.trim();
+        if (!cur || (cur === DEFAULT_STORE && !norm(cur).startsWith(norm(p.store)))) { st.value = p.store; got.push('magasin'); }
+      }
+      if (nameWasEmpty && got.includes('nom')) {
+        const gc = guessCat(p.name);
+        if (gc) { sel.value = gc; sel.dispatchEvent(new Event('change')); got.push('catégorie'); }
+      }
+      let photoMsg = '';
+      if (photos && p.image && photos.count() === 0) {
+        try {
+          const blob = await relayGet('?img=' + encodeURIComponent(p.image) + '&ref=' + encodeURIComponent(link), true);
+          await photos.add(await makePhoto(blob));
+          got.push('photo');
+        } catch (e) { photoMsg = ' La photo n’a pas pu être récupérée.'; }
+      }
+      msg.textContent = (got.length ? 'Rempli : ' + got.join(', ') + '. Vérifiez puis enregistrez.' : 'Les champs étaient déjà remplis, rien n’a été changé.') + photoMsg;
+    } catch (e) {
+      msg.textContent = 'Le relais ne répond pas. Vérifiez la connexion et l’adresse dans Réglages > Remplissage automatique.';
+    } finally { busy = false; btn.disabled = false; }
+  };
+  btn.onclick = run;
+  urlEl.addEventListener('paste', () => setTimeout(() => { if (firstLink(urlEl.value)) run(); }, 80));
+  return run;
+}
+
 const ICON = {
   back: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>',
   plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
@@ -252,7 +353,7 @@ function openForm(item, asCopy = false, opts = {}) {
   const isNew = !item || asCopy || !!opts.fresh;
   const d = item
     ? { ...item, photos: [...(item.photos || [])] }
-    : { id: uid(), name: '', cat: (state.cat !== 'all' && state.cat !== 'none') ? state.cat : (cats[0] && cats[0].id) || '', qty: 1, price: null, date: today(), store: DEFAULT_STORE, url: '', description: '', location: '', notes: '', photos: [] };
+    : { id: uid(), name: '', cat: (state.cat !== 'all' && state.cat !== 'none') ? state.cat : (cats[0] && cats[0].id) || '', qty: 1, price: null, date: today(), store: DEFAULT_STORE, url: opts.link || '', description: '', location: '', notes: '', photos: [] };
   if (asCopy) { d.id = uid(); d.name = d.name + ' (copie)'; delete d.created; }
 
   openSheet(`
@@ -273,6 +374,8 @@ function openForm(item, asCopy = false, opts = {}) {
       <label>Date d’achat<input id="f-date" class="field" type="date" value="${esc(d.date || '')}"></label>
       <label>Lieu d’achat<input id="f-store" class="field" placeholder="Leroy Merlin Nice, Castorama, Brico Dépôt…" value="${esc(d.store)}"></label>
       <label>Lien vers l’article<input id="f-url" class="field" inputmode="url" autocapitalize="off" placeholder="https://" value="${esc(d.url)}"></label>
+      <button type="button" class="btn wide" id="f-auto">Remplir automatiquement depuis ce lien</button>
+      <p class="hint" id="f-automsg" role="status" aria-live="polite"></p>
       <label>Emplacement de rangement<input id="f-loc" class="field" placeholder="Garage, atelier, cabanon…" value="${esc(d.location)}"></label>
       <label>Descriptif du commerçant<textarea id="f-desc" rows="5">${esc(d.description)}</textarea></label>
       <label>Notes personnelles (référence, dimensions, couleur)<textarea id="f-notes" rows="3">${esc(d.notes)}</textarea></label>
@@ -318,6 +421,8 @@ function openForm(item, asCopy = false, opts = {}) {
   };
   $('#f-files', sheet).onchange = addFiles;
   $('#f-cam', sheet).onchange = addFiles;
+  const runAuto = bindAutofill('f', sel, { count: () => d.photos.length, add: async p => { d.photos.push(p); drawPhotos(); } });
+  if (opts.auto && d.url) runAuto();
 
   $('#f-save', sheet).onclick = async () => {
     const name = $('#f-name', sheet).value.trim();
@@ -478,9 +583,9 @@ function toInventory(s) {
   openForm({ id: uid(), name: s.name, cat: s.cat, qty: s.qty || 1, price: s.price, date: today(), store: s.store, url: s.url, description: '', location: '', notes: s.notes || '', photos: [] }, false, { fromShop: s.id, fresh: true });
 }
 
-function openShopForm(s) {
+function openShopForm(s, opts = {}) {
   const isNew = !s;
-  const d = s ? { ...s } : { id: uid(), name: '', cat: cats[0] ? cats[0].id : '', qty: 1, price: null, store: DEFAULT_STORE, url: '', notes: '', done: false };
+  const d = s ? { ...s } : { id: uid(), name: '', cat: cats[0] ? cats[0].id : '', qty: 1, price: null, store: DEFAULT_STORE, url: opts.link || '', notes: '', done: false };
   openSheet(`
     <header class="sh-head"><button class="icon" data-close aria-label="Annuler">${ICON.back}</button><h2>${isNew ? 'Nouvel article à acheter' : 'Modifier'}</h2></header>
     <div class="sh-body form">
@@ -492,6 +597,8 @@ function openShopForm(s) {
       </div>
       <label>Où l’acheter<input id="s-store" class="field" value="${esc(d.store)}"></label>
       <label>Lien vers l’article<input id="s-url" class="field" inputmode="url" autocapitalize="off" placeholder="https://" value="${esc(d.url)}"></label>
+      <button type="button" class="btn wide" id="s-auto">Remplir automatiquement depuis ce lien</button>
+      <p class="hint" id="s-automsg" role="status" aria-live="polite"></p>
       <label>Notes (référence, dimensions, pourquoi)<textarea id="s-notes" rows="3">${esc(d.notes)}</textarea></label>
       ${d.url ? `<a class="btn wide" href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">Ouvrir la fiche en ligne</a>` : ''}
       ${isNew ? '' : '<button class="btn wide" id="s-inv">Acheté : l’ajouter à l’inventaire</button><button class="btn wide danger" id="s-del">Supprimer de la liste</button>'}
@@ -499,6 +606,8 @@ function openShopForm(s) {
     <footer class="sh-foot"><button class="btn" data-close>Annuler</button><button class="btn primary" id="s-save">Enregistrer</button></footer>`);
   const sel = $('#s-cat', sheet);
   bindCatSelect(sel, d.cat);
+  const runAutoS = bindAutofill('s', sel, null);
+  if (opts.auto && d.url) runAutoS();
   $('#s-save', sheet).onclick = async () => {
     const name = $('#s-name', sheet).value.trim();
     if (!name) { toast('Indiquez le nom de l’article.'); $('#s-name', sheet).focus(); return; }
@@ -615,11 +724,25 @@ async function renderSettings() {
     <label class="btn wide">Restaurer en ajoutant à l’existant<input id="imp1" type="file" accept="application/json,.json" hidden></label>
     <label class="btn wide danger">Restaurer en remplaçant tout<input id="imp2" type="file" accept="application/json,.json" hidden></label>
     <button class="btn wide" id="csv">Exporter en tableur (CSV, sans photos)</button>
+    <h3>Remplissage automatique</h3>
+    <p class="muted">Adresse du relais Cloudflare qui lit les pages des magasins (voir le guide).</p>
+    <input id="relay" class="field" inputmode="url" autocapitalize="off" placeholder="https://mes-outils-relais.xxx.workers.dev" value="${esc(relayUrl())}">
+    <button class="btn wide" id="relay-save">Enregistrer et tester</button>
+    <p class="muted" id="relay-msg" role="status" aria-live="polite"></p>
     <h3>Application</h3>
     ${isStandalone() ? '<p class="muted">Application déjà installée sur cet appareil.</p>' : '<button class="btn wide" id="inst">Installer sur l’écran d’accueil</button>'}
     ${persisted ? '<p class="muted">Stockage protégé contre le nettoyage automatique.</p>' : '<button class="btn wide" id="pers">Protéger les données contre le nettoyage automatique</button>'}
   </section>`;
   $('#exp').onclick = exportJSON;
+  $('#relay-save').onclick = async () => {
+    const v = fixUrl($('#relay').value).replace(/\/+$/, '');
+    const out = $('#relay-msg');
+    if (!v) { localStorage.removeItem('relayOutils'); out.textContent = 'Adresse effacée.'; return; }
+    localStorage.setItem('relayOutils', v);
+    out.textContent = 'Test en cours…';
+    try { const r = await relayGet('?ping=1'); out.textContent = r && r.pong ? 'Le relais répond : tout est prêt.' : 'Cette adresse ne ressemble pas au relais.'; }
+    catch (e) { out.textContent = 'Le relais ne répond pas. Vérifiez l’adresse.'; }
+  };
   $('#csv').onclick = exportCSV;
   $('#imp1').onchange = e => { const f = e.target.files[0]; if (f) importJSON(f, false); e.target.value = ''; };
   $('#imp2').onchange = e => { const f = e.target.files[0]; if (f && confirm('Remplacer tout l’inventaire actuel par cette sauvegarde ?')) importJSON(f, true); e.target.value = ''; };
@@ -638,6 +761,25 @@ async function renderSettings() {
 }
 
 /* ---------- démarrage ---------- */
+
+/* ---------- lien reçu par le menu « Partager » du téléphone ---------- */
+function handleShare() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has('url') && !q.has('text') && !q.has('title')) return;
+  const link = firstLink(q.get('url'), q.get('text'), q.get('title'));
+  history.replaceState(null, '', location.pathname);
+  if (!link) { toast('Aucun lien trouvé dans ce partage.'); return; }
+  openSheet(`
+    <header class="sh-head"><button class="icon" data-close aria-label="Annuler">${ICON.back}</button><h2>Ajouter cet article</h2></header>
+    <div class="sh-body form">
+      <p class="muted" style="overflow-wrap:anywhere">${esc(link)}</p>
+      <button class="btn primary wide" id="sh-inv">Je l’ai déjà : l’ajouter à l’inventaire</button>
+      <button class="btn wide" id="sh-shop">Je veux l’acheter : liste de course</button>
+    </div>`);
+  $('#sh-inv', sheet).onclick = () => openForm(null, false, { link, auto: true });
+  $('#sh-shop', sheet).onclick = () => openShopForm(null, { link, auto: true });
+}
+
 (async function init() {
   try {
     db = await openDB();
@@ -649,6 +791,7 @@ async function renderSettings() {
   }
   history.replaceState(null, '');
   setTab('inv');
+  handleShare();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
 })();
