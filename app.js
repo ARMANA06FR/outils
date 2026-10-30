@@ -58,6 +58,42 @@ async function relayGet(path, asBlob) {
   } finally { clearTimeout(timer); }
 }
 
+/* ---------- sélecteur de photos (inventaire et liste de course) ---------- */
+function photoPickerHtml(pre) {
+  return `<div class="photos" id="${pre}-ph"></div>
+      <p class="hint">Touchez une photo pour en faire la vignette (bordure colorée).</p>
+      <div class="two pickrow">
+        <label class="btn pick">Prendre une photo<input id="${pre}-cam" type="file" accept="image/*" capture="environment" hidden></label>
+        <label class="btn pick">Choisir dans la galerie<input id="${pre}-files" type="file" accept="image/*" multiple hidden></label>
+      </div>`;
+}
+function bindPhotoPicker(pre, d) {
+  const phBox = $('#' + pre + '-ph', sheet);
+  const draw = () => {
+    phBox.innerHTML = d.photos.map((p, k) => `<div class="pt"><img src="${urlOf(p.thumb)}" data-k="${k}" alt="Photo ${k + 1}"><button type="button" data-rm="${k}" aria-label="Retirer la photo ${k + 1}">×</button></div>`).join('');
+  };
+  draw();
+  phBox.onclick = e => {
+    const rm = e.target.closest('[data-rm]');
+    if (rm) { d.photos.splice(+rm.dataset.rm, 1); draw(); return; }
+    const im = e.target.closest('img');
+    if (im) { const k = +im.dataset.k; d.photos.unshift(d.photos.splice(k, 1)[0]); draw(); }
+  };
+  const addFiles = async e => {
+    const files = [...e.target.files];
+    if (!files.length) return;
+    toast('Traitement des photos…');
+    for (const f of files) {
+      try { d.photos.push(await makePhoto(f)); draw(); }
+      catch (err) { toast('Une photo n’a pas pu être lue.'); }
+    }
+    e.target.value = '';
+  };
+  $('#' + pre + '-files', sheet).onchange = addFiles;
+  $('#' + pre + '-cam', sheet).onchange = addFiles;
+  return draw;
+}
+
 // Branche le bouton « Remplir automatiquement » d'un formulaire (pre = 'f' inventaire, 's' liste de course)
 function bindAutofill(pre, sel, photos) {
   const g = id => $('#' + pre + '-' + id, sheet);
@@ -359,12 +395,7 @@ function openForm(item, asCopy = false, opts = {}) {
   openSheet(`
     <header class="sh-head"><button class="icon" data-close aria-label="Annuler">${ICON.back}</button><h2>${isNew ? 'Nouvel article' : 'Modifier l’article'}</h2></header>
     <div class="sh-body form">
-      <div class="photos" id="ph"></div>
-      <p class="hint">Touchez une photo pour en faire la vignette (bordure colorée).</p>
-      <div class="two pickrow">
-        <label class="btn pick">Prendre une photo<input id="f-cam" type="file" accept="image/*" capture="environment" hidden></label>
-        <label class="btn pick">Choisir dans la galerie<input id="f-files" type="file" accept="image/*" multiple hidden></label>
-      </div>
+      ${photoPickerHtml('f')}
       <label>Nom de l’outil ou de l’accessoire<input id="f-name" class="field" autocomplete="off" value="${esc(d.name)}"></label>
       <label>Catégorie<select id="f-cat"></select></label>
       <div class="two">
@@ -398,29 +429,7 @@ function openForm(item, asCopy = false, opts = {}) {
     drawCats(c.id); lastCat = c.id;
   };
 
-  const phBox = $('#ph', sheet);
-  const drawPhotos = () => {
-    phBox.innerHTML = d.photos.map((p, k) => `<div class="pt"><img src="${urlOf(p.thumb)}" data-k="${k}" alt="Photo ${k + 1}"><button type="button" data-rm="${k}" aria-label="Retirer la photo ${k + 1}">×</button></div>`).join('');
-  };
-  drawPhotos();
-  phBox.onclick = e => {
-    const rm = e.target.closest('[data-rm]');
-    if (rm) { d.photos.splice(+rm.dataset.rm, 1); drawPhotos(); return; }
-    const im = e.target.closest('img');
-    if (im) { const k = +im.dataset.k; d.photos.unshift(d.photos.splice(k, 1)[0]); drawPhotos(); }
-  };
-  const addFiles = async e => {
-    const files = [...e.target.files];
-    if (!files.length) return;
-    toast('Traitement des photos…');
-    for (const f of files) {
-      try { d.photos.push(await makePhoto(f)); drawPhotos(); }
-      catch (err) { toast('Une photo n’a pas pu être lue.'); }
-    }
-    e.target.value = '';
-  };
-  $('#f-files', sheet).onchange = addFiles;
-  $('#f-cam', sheet).onchange = addFiles;
+  const drawPhotos = bindPhotoPicker('f', d);
   const runAuto = bindAutofill('f', sel, { count: () => d.photos.length, add: async p => { d.photos.push(p); drawPhotos(); } });
   if (opts.auto && d.url) runAuto();
 
@@ -516,6 +525,7 @@ const shopTotal = list => list.reduce((s, x) => s + (x.price || 0) * (x.qty || 1
 
 const shopRow = s => `<li class="srow${s.done ? ' done' : ''}" data-id="${s.id}">
   <button class="tick" data-tick aria-pressed="${!!s.done}" aria-label="${s.done ? 'Remettre à acheter' : 'Marquer comme acheté'} : ${esc(s.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5 10 17.5 19 7"/></svg></button>
+  ${(s.photos || [])[0] ? `<img class="thumb" src="${urlOf(s.photos[0].thumb)}" alt="" loading="lazy">` : ''}
   <button class="body sbody" data-open><strong>${esc(s.name)}</strong><span class="meta">${esc([s.store, s.notes].filter(Boolean).join(', '))}</span></button>
   <span class="right"><span class="qty">× ${s.qty || 1}</span><span class="price">${s.price != null ? eur(s.price * (s.qty || 1)) : ''}</span></span>
   ${s.done ? '<button class="btn small" data-inv>À l’inventaire</button>' : ''}</li>`;
@@ -580,15 +590,16 @@ function shopText() {
 }
 
 function toInventory(s) {
-  openForm({ id: uid(), name: s.name, cat: s.cat, qty: s.qty || 1, price: s.price, date: today(), store: s.store, url: s.url, description: '', location: '', notes: s.notes || '', photos: [] }, false, { fromShop: s.id, fresh: true });
+  openForm({ id: uid(), name: s.name, cat: s.cat, qty: s.qty || 1, price: s.price, date: today(), store: s.store, url: s.url, description: '', location: '', notes: s.notes || '', photos: [...(s.photos || [])] }, false, { fromShop: s.id, fresh: true });
 }
 
 function openShopForm(s, opts = {}) {
   const isNew = !s;
-  const d = s ? { ...s } : { id: uid(), name: '', cat: cats[0] ? cats[0].id : '', qty: 1, price: null, store: DEFAULT_STORE, url: opts.link || '', notes: '', done: false };
+  const d = s ? { ...s, photos: [...(s.photos || [])] } : { id: uid(), name: '', cat: cats[0] ? cats[0].id : '', qty: 1, price: null, store: DEFAULT_STORE, url: opts.link || '', notes: '', done: false, photos: [] };
   openSheet(`
     <header class="sh-head"><button class="icon" data-close aria-label="Annuler">${ICON.back}</button><h2>${isNew ? 'Nouvel article à acheter' : 'Modifier'}</h2></header>
     <div class="sh-body form">
+      ${photoPickerHtml('s')}
       <label>Outil ou accessoire<input id="s-name" class="field" autocomplete="off" value="${esc(d.name)}"></label>
       <label>Catégorie<select id="s-cat"></select></label>
       <div class="two">
@@ -606,7 +617,8 @@ function openShopForm(s, opts = {}) {
     <footer class="sh-foot"><button class="btn" data-close>Annuler</button><button class="btn primary" id="s-save">Enregistrer</button></footer>`);
   const sel = $('#s-cat', sheet);
   bindCatSelect(sel, d.cat);
-  const runAutoS = bindAutofill('s', sel, null);
+  const drawShopPhotos = bindPhotoPicker('s', d);
+  const runAutoS = bindAutofill('s', sel, { count: () => d.photos.length, add: async p => { d.photos.push(p); drawShopPhotos(); } });
   if (opts.auto && d.url) runAutoS();
   $('#s-save', sheet).onclick = async () => {
     const name = $('#s-name', sheet).value.trim();
@@ -667,7 +679,8 @@ function download(blob, name) {
 
 async function exportJSON() {
   toast('Préparation de la sauvegarde…');
-  const out = { app: 'inventaire-outils', version: 1, exported: new Date().toISOString(), categories: cats, shopping: shop, items: [] };
+  const out = { app: 'inventaire-outils', version: 1, exported: new Date().toISOString(), categories: cats, shopping: [], items: [] };
+  for (const x of shop) out.shopping.push({ ...x, photos: await Promise.all((x.photos || []).map(p => blobToData(p.full))) });
   for (const i of items) out.items.push({ ...i, photos: await Promise.all((i.photos || []).map(p => blobToData(p.full))) });
   download(new Blob([JSON.stringify(out)], { type: 'application/json' }), `outils-${today()}.json`);
   localStorage.setItem('lastBackupOutils', String(Date.now()));
@@ -687,7 +700,15 @@ async function importJSON(file, replace) {
     if (data.app !== 'inventaire-outils') throw new Error('format');
     if (replace) for (const n of ['items', 'categories', 'shopping']) await clearStore(n);
     for (const c of data.categories || []) await put('categories', c);
-    for (const c of data.shopping || []) await put('shopping', c);
+    for (const c of data.shopping || []) {
+      const photos = [];
+      for (const dUrl of c.photos || []) {
+        if (typeof dUrl !== 'string') continue;
+        const blob = await (await fetch(dUrl)).blob();
+        photos.push({ full: blob, thumb: await shrink(blob, 360, .75) });
+      }
+      await put('shopping', { ...c, photos });
+    }
     toast('Import en cours…');
     for (const i of data.items || []) {
       const photos = [];
@@ -706,7 +727,7 @@ async function importJSON(file, replace) {
 }
 
 async function renderSettings() {
-  const nPhotos = items.reduce((s, i) => s + (i.photos || []).length, 0);
+  const nPhotos = [...items, ...shop].reduce((n, i) => n + (i.photos || []).length, 0);
   let usage = '';
   try {
     const est = await navigator.storage.estimate();
